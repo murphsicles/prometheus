@@ -1,0 +1,9 @@
+[package]
+name = "@metrics/prometheus"
+version = "0.1.0"
+edition = "2026"
+description = "Prometheus metrics instrumentation for Zeta — Counter, Gauge, Histogram, Registry, text exposition format"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/murphsicles/prometheus"
+keywords = ["prometheus", "metrics", "monitoring", "observability"]
+categories = ["observability"]
