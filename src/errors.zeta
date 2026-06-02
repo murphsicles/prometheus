@@ -1,0 +1,15 @@
+// Auto-converted from /tmp/df-prometheus-0.13.4/prometheus-0.13.4/src/errors.rs
+
+use thiserror::Error;
+/// The error types for prometheus.
+#[derive(Debug, Error)]
+pub enum Error {
+ AlreadyReg,
+ InconsistentCardinality { expect: usize, got: usize },
+ Msg(String),
+ Io(std::io::Error),
+ Protobuf(protobuf::error::ProtobufError),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+

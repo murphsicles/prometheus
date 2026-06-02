@@ -1,0 +1,122 @@
+// Auto-converted from /tmp/df-prometheus-0.13.4/prometheus-0.13.4/src/auto_flush.rs
+
+use crate::core::Atomic;
+use crate::counter::{ CounterWithValueType, GenericLocalCounter };
+use crate::histogram::{ Instant, LocalHistogram };
+use crate::metrics::MayFlush;
+use crate::timer;
+use parking_lot::Mutex;
+use std::thread::LocalKey;
+/// Delegator for auto flush-able local counter
+pub trait CounterDelegator<T: static + MayFlush, V: CounterWithValueType> {
+ fn get_root_metric(&self) -> &LocalKey<T>;
+ fn get_local<a>(&self, root_metric: &T) -> &GenericLocalCounter<V::ValueType>
+}
+
+/// Delegator for auto flush-able local counter
+pub trait HistogramDelegator<T: static + MayFlush> {
+ fn get_root_metric(&self) -> &LocalKey<T>;
+ fn get_local<a>(&self, root_metric: &T) -> &LocalHistogram
+}
+
+/// Auto flush-able local counter
+#[derive(Debug)]
+pub struct AFLocalCounter<T: static + MayFlush, V: CounterWithValueType, D: CounterDelegator<T, V>> {
+ delegator: D,
+ _p: std::marker::PhantomData<(Mutex<T>, Mutex<V>)>,
+}
+
+impl<T: static + MayFlush, V: CounterWithValueType, D: CounterDelegator<T, V>> AFLocalCounter<T, V, D> {
+ pub fn new(delegator: D) -> AFLocalCounter<T, V, D> {
+ timer::ensure_updater();
+ AFLocalCounter { delegator, _p: std::marker::PhantomData }
+ }
+ 
+}
+
+/// Auto flush-able local counter
+impl<T: static + MayFlush, V: CounterWithValueType, D: CounterDelegator<T, V>> AFLocalCounter<T, V, D> {
+ fn get_root_metric(&self) -> &LocalKey<T> {
+ self.delegator.get_root_metric()
+ }
+ 
+ fn get_counter(&self, root_metric: &T) -> &GenericLocalCounter<V::ValueType> {
+ self.delegator.get_local(root_metric)
+ }
+ 
+ pub fn inc_by(&self, v: Atomic::T) {
+ self.get_root_metric().with(| m | { let counter = self.get_counter(m); counter.inc_by(v); m.may_flush(); })
+ }
+ 
+ pub fn inc(&self) {
+ self.get_root_metric().with(| m | { let counter = self.get_counter(m); counter.inc(); m.may_flush(); })
+ }
+ 
+ pub fn get(&self) -> Atomic::T {
+ self.get_root_metric().with(| m | { let counter = self.get_counter(m); counter.get() })
+ }
+ 
+ pub fn reset(&self) {
+ self.get_root_metric().with(| m | { let counter = self.get_counter(m); counter.reset(); })
+ }
+ 
+ pub fn flush(&self) {
+ self.get_root_metric().with(| m | m.flush())
+ }
+ 
+}
+
+/// Auto flush-able local counter
+#[derive(Debug)]
+pub struct AFLocalHistogram<T: static + MayFlush, D: HistogramDelegator<T>> {
+ delegator: D,
+ _p: std::marker::PhantomData<Mutex<T>>,
+}
+
+impl<T: static + MayFlush, D: HistogramDelegator<T>> AFLocalHistogram<T, D> {
+ pub fn new(delegator: D) -> AFLocalHistogram<T, D> {
+ timer::ensure_updater();
+ AFLocalHistogram { delegator, _p: std::marker::PhantomData }
+ }
+ 
+}
+
+impl<M: static + MayFlush, D: HistogramDelegator<M>> AFLocalHistogram<M, D> {
+ pub fn observe(&self, v: f64) {
+ self.delegator.get_root_metric().with(| m | { let local = self.delegator.get_local(m); local.observe(v); m.may_flush(); })
+ }
+ 
+ pub fn observe_closure_duration(&self, f: F) -> T {
+ let instant = Instant::now();
+ let res = f();
+ let elapsed = instant.elapsed_sec();
+ self.observe(elapsed);
+ res
+ }
+ 
+ pub fn observe_closure_duration_coarse(&self, f: F) -> T {
+ let instant = Instant::now_coarse();
+ let res = f();
+ let elapsed = instant.elapsed_sec();
+ self.observe(elapsed);
+ res
+ }
+ 
+ pub fn clear(&self) {
+ self.delegator.get_root_metric().with(| m | self.delegator.get_local(m).clear())
+ }
+ 
+ pub fn flush(&self) {
+ self.delegator.get_root_metric().with(| m | self.delegator.get_local(m).flush());
+ }
+ 
+ pub fn get_sample_sum(&self) -> f64 {
+ self.delegator.get_root_metric().with(| m | self.delegator.get_local(m).get_sample_sum())
+ }
+ 
+ pub fn get_sample_count(&self) -> u64 {
+ self.delegator.get_root_metric().with(| m | self.delegator.get_local(m).get_sample_count())
+ }
+ 
+}
+
