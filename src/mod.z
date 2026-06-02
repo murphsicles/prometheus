@@ -1,0 +1,746 @@
+// zeta-prometheus — Prometheus metrics library for Zeta
+// Port of the Rust prometheus crate. Exports Counter, Gauge, Histogram,
+// Registry, MetricFamily, and exposition-format text encoding.
+
+// ── FNV-1a hash (non-cryptographic) ──────────────────────────────────────────
+
+pub fn fnv1a_hash(data: &[u8]) -> u64 {
+    let mut hash: u64 = 14695981039346656037; // FNV offset basis
+    let prime: u64 = 1099511628211;           // FNV prime
+    let mut i: u64 = 0;
+    let len: u64 = data.len();
+    while i < len {
+        let byte: u8 = data[i];
+        hash = hash ^ byte;
+        hash = hash * prime;
+        i = i + 1;
+    }
+    return hash;
+}
+
+// ── Desc ─────────────────────────────────────────────────────────────────────
+
+pub struct Desc {
+    fq_name: str,
+    help: str,
+    const_labels: Vec<(str, str)>,
+    variable_labels: Vec<str>,
+}
+
+impl Desc {
+    pub fn new(fq_name: str, help: str) -> Desc {
+        return Desc {
+            fq_name: fq_name,
+            help: help,
+            const_labels: Vec::new(),
+            variable_labels: Vec::new(),
+        };
+    }
+}
+
+// ── Counter ──────────────────────────────────────────────────────────────────
+
+pub struct Counter {
+    value: f64,
+    desc: Desc,
+}
+
+impl Counter {
+    pub fn new(name: str, help: str) -> Counter {
+        return Counter {
+            value: 0.0,
+            desc: Desc::new(name, help),
+        };
+    }
+
+    pub fn inc() {
+        let mut self = self;
+        self.value = self.value + 1.0;
+    }
+
+    pub fn inc_by(v: f64) {
+        let mut self = self;
+        if v < 0.0 {
+            return;
+        }
+        self.value = self.value + v;
+    }
+
+    pub fn get() -> f64 {
+        return self.value;
+    }
+
+    pub fn desc() -> &Desc {
+        return &self.desc;
+    }
+}
+
+// ── Gauge ────────────────────────────────────────────────────────────────────
+
+pub struct Gauge {
+    value: f64,
+    desc: Desc,
+}
+
+impl Gauge {
+    pub fn new(name: str, help: str) -> Gauge {
+        return Gauge {
+            value: 0.0,
+            desc: Desc::new(name, help),
+        };
+    }
+
+    pub fn set(v: f64) {
+        let mut self = self;
+        self.value = v;
+    }
+
+    pub fn inc() {
+        let mut self = self;
+        self.value = self.value + 1.0;
+    }
+
+    pub fn dec() {
+        let mut self = self;
+        self.value = self.value - 1.0;
+    }
+
+    pub fn add(v: f64) {
+        let mut self = self;
+        self.value = self.value + v;
+    }
+
+    pub fn sub(v: f64) {
+        let mut self = self;
+        self.value = self.value - v;
+    }
+
+    pub fn get() -> f64 {
+        return self.value;
+    }
+
+    pub fn desc() -> &Desc {
+        return &self.desc;
+    }
+}
+
+// ── Histogram bucket ─────────────────────────────────────────────────────────
+
+pub struct Bucket {
+    upper_bound: f64,
+    cumulative_count: u64,
+}
+
+// ── Histogram ────────────────────────────────────────────────────────────────
+
+pub fn default_buckets() -> Vec<f64> {
+    let mut buckets: Vec<f64> = Vec::new();
+    buckets.push(0.005);
+    buckets.push(0.01);
+    buckets.push(0.025);
+    buckets.push(0.05);
+    buckets.push(0.1);
+    buckets.push(0.25);
+    buckets.push(0.5);
+    buckets.push(1.0);
+    buckets.push(2.5);
+    buckets.push(5.0);
+    buckets.push(10.0);
+    return buckets;
+}
+
+pub struct Histogram {
+    buckets: Vec<Bucket>,
+    count: u64,
+    sum: f64,
+    desc: Desc,
+}
+
+impl Histogram {
+    pub fn new(name: str, help: str, bucket_bounds: Vec<f64>) -> Histogram {
+        let mut buckets: Vec<Bucket> = Vec::new();
+        let mut i: u64 = 0;
+        let len: u64 = bucket_bounds.len();
+        while i < len {
+            buckets.push(Bucket {
+                upper_bound: bucket_bounds[i],
+                cumulative_count: 0,
+            });
+            i = i + 1;
+        }
+        return Histogram {
+            buckets: buckets,
+            count: 0,
+            sum: 0.0,
+            desc: Desc::new(name, help),
+        };
+    }
+
+    pub fn observe(v: f64) {
+        let mut self = self;
+        self.count = self.count + 1;
+        self.sum = self.sum + v;
+
+        let mut i: u64 = 0;
+        let len: u64 = self.buckets.len();
+        while i < len {
+            if v <= self.buckets[i].upper_bound {
+                self.buckets[i].cumulative_count = self.buckets[i].cumulative_count + 1;
+            }
+            i = i + 1;
+        }
+    }
+
+    pub fn count() -> u64 {
+        return self.count;
+    }
+
+    pub fn sum() -> f64 {
+        return self.sum;
+    }
+
+    pub fn desc() -> &Desc {
+        return &self.desc;
+    }
+}
+
+// ── Metric ───────────────────────────────────────────────────────────────────
+
+pub struct Metric {
+    pub label_values: Vec<(str, str)>,
+    pub value: f64,
+    pub bucket_count: u64,
+    pub bucket_sum: f64,
+    pub buckets: Vec<Bucket>,
+}
+
+// ── MetricFamily ─────────────────────────────────────────────────────────────
+
+pub struct MetricFamily {
+    pub name: str,
+    pub help: str,
+    pub type_name: str,
+    pub metrics: Vec<Metric>,
+}
+
+// ── Registry ─────────────────────────────────────────────────────────────────
+
+pub struct Registry {
+    pub counters: Vec<Counter>,
+    pub gauges: Vec<Gauge>,
+    pub histograms: Vec<Histogram>,
+}
+
+impl Registry {
+    pub fn new() -> Registry {
+        return Registry {
+            counters: Vec::new(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+    }
+
+    pub fn register_counter(ctr: Counter) {
+        let mut self = self;
+        self.counters.push(ctr);
+    }
+
+    pub fn register_gauge(g: Gauge) {
+        let mut self = self;
+        self.gauges.push(g);
+    }
+
+    pub fn register_histogram(h: Histogram) {
+        let mut self = self;
+        self.histograms.push(h);
+    }
+
+    pub fn gather() -> Vec<MetricFamily> {
+        let mut families: Vec<MetricFamily> = Vec::new();
+
+        // Gather counters
+        let mut i: u64 = 0;
+        let clen: u64 = self.counters.len();
+        while i < clen {
+            let ctr = &self.counters[i];
+            let desc = ctr.desc();
+            let name: str = desc.fq_name;
+            let help: str = desc.help;
+            let val: f64 = ctr.get();
+
+            let mut metrics: Vec<Metric> = Vec::new();
+            metrics.push(Metric {
+                label_values: Vec::new(),
+                value: val,
+                bucket_count: 0,
+                bucket_sum: 0.0,
+                buckets: Vec::new(),
+            });
+
+            families.push(MetricFamily {
+                name: name,
+                help: help,
+                type_name: "counter",
+                metrics: metrics,
+            });
+            i = i + 1;
+        }
+
+        // Gather gauges
+        let mut j: u64 = 0;
+        let glen: u64 = self.gauges.len();
+        while j < glen {
+            let g = &self.gauges[j];
+            let desc = g.desc();
+            let name: str = desc.fq_name;
+            let help: str = desc.help;
+            let val: f64 = g.get();
+
+            let mut metrics: Vec<Metric> = Vec::new();
+            metrics.push(Metric {
+                label_values: Vec::new(),
+                value: val,
+                bucket_count: 0,
+                bucket_sum: 0.0,
+                buckets: Vec::new(),
+            });
+
+            families.push(MetricFamily {
+                name: name,
+                help: help,
+                type_name: "gauge",
+                metrics: metrics,
+            });
+            j = j + 1;
+        }
+
+        // Gather histograms
+        let mut k: u64 = 0;
+        let hlen: u64 = self.histograms.len();
+        while k < hlen {
+            let h = &self.histograms[k];
+            let desc = h.desc();
+            let name: str = desc.fq_name;
+            let help: str = desc.help;
+            let cnt: u64 = h.count();
+            let sm: f64 = h.sum();
+            let bkt_copy: Vec<Bucket> = Vec::new();
+
+            // Copy buckets
+            let mut bi: u64 = 0;
+            let blen: u64 = h.buckets.len();
+            while bi < blen {
+                bkt_copy.push(Bucket {
+                    upper_bound: h.buckets[bi].upper_bound,
+                    cumulative_count: h.buckets[bi].cumulative_count,
+                });
+                bi = bi + 1;
+            }
+
+            let mut metrics: Vec<Metric> = Vec::new();
+            metrics.push(Metric {
+                label_values: Vec::new(),
+                value: 0.0,
+                bucket_count: cnt,
+                bucket_sum: sm,
+                buckets: bkt_copy,
+            });
+
+            families.push(MetricFamily {
+                name: name,
+                help: help,
+                type_name: "histogram",
+                metrics: metrics,
+            });
+            k = k + 1;
+        }
+
+        return families;
+    }
+}
+
+// ── FmtNumber helper ─────────────────────────────────────────────────────────
+
+// Convert an f64 to a compact decimal string with no trailing zeros.
+fn fmt_f64(v: f64) -> str {
+    // Simple approach: format with enough precision then strip trailing zeros
+    let s: str = v.to_string();
+    let mut out: Vec<u8> = Vec::new();
+    let mut i: u64 = 0;
+    let len: u64 = s.len();
+    let mut has_dot: bool = false;
+    let mut dot_pos: u64 = 0;
+
+    // Find decimal point position
+    while i < len {
+        if s[i] == 46 { // '.'
+            has_dot = true;
+            dot_pos = i;
+        }
+        i = i + 1;
+    }
+
+    if has_dot {
+        // Find last non-zero digit
+        let mut end: u64 = len;
+        while end > dot_pos + 1 {
+            if s[end - 1] != 48 { // '0'
+                break;
+            }
+            end = end - 1;
+        }
+        // Copy up to end
+        let mut j: u64 = 0;
+        while j < end {
+            out.push(s[j]);
+            j = j + 1;
+        }
+    } else {
+        let mut j: u64 = 0;
+        while j < len {
+            out.push(s[j]);
+            j = j + 1;
+        }
+    }
+
+    return out.as_str();
+}
+
+// ── Text exposition format ──────────────────────────────────────────────────
+
+fn escape_label_value(v: str) -> str {
+    let mut out: Vec<u8> = Vec::new();
+    let mut i: u64 = 0;
+    let len: u64 = v.len();
+    while i < len {
+        let c: u8 = v[i];
+        if c == 34 { // "
+            out.push(92); // \
+            out.push(34);
+        } else if c == 92 { // \
+            out.push(92);
+            out.push(92);
+        } else if c == 10 { // \n
+            out.push(92);
+            out.push(110);
+        } else {
+            out.push(c);
+        }
+        i = i + 1;
+    }
+    return out.as_str();
+}
+
+fn fmt_u64(v: u64) -> str {
+    return v.to_string();
+}
+
+// ── Public API: encode_text ─────────────────────────────────────────────────
+
+pub fn encode_text(families: Vec<MetricFamily>) -> str {
+    let mut out: Vec<u8> = Vec::new();
+
+    let mut fi: u64 = 0;
+    let flen: u64 = families.len();
+    while fi < flen {
+        let mf = &families[fi];
+
+        // # HELP ...
+        out.push(35); // #
+        out.push(32); // space
+        out.push(72); // H
+        out.push(69); // E
+        out.push(76); // L
+        out.push(80); // P
+        out.push(32);
+        let mut ni: u64 = 0;
+        let nlen: u64 = mf.name.len();
+        while ni < nlen {
+            out.push(mf.name[ni]);
+            ni = ni + 1;
+        }
+        out.push(32);
+        let mut hi: u64 = 0;
+        let hlen: u64 = mf.help.len();
+        while hi < hlen {
+            out.push(mf.help[hi]);
+            hi = hi + 1;
+        }
+        out.push(10); // \n
+
+        // # TYPE ...
+        out.push(35);
+        out.push(32);
+        out.push(84); // T
+        out.push(89); // Y
+        out.push(80); // P
+        out.push(69); // E
+        out.push(32);
+        ni = 0;
+        while ni < nlen {
+            out.push(mf.name[ni]);
+            ni = ni + 1;
+        }
+        out.push(32);
+        let mut ti: u64 = 0;
+        let tlen: u64 = mf.type_name.len();
+        while ti < tlen {
+            out.push(mf.type_name[ti]);
+            ti = ti + 1;
+        }
+        out.push(10);
+
+        // Metric lines
+        let mut mi: u64 = 0;
+        let mlen: u64 = mf.metrics.len();
+        while mi < mlen {
+            let metric = &mf.metrics[mi];
+
+            if mf.type_name == "histogram" {
+                // Buckets
+                let mut bi: u64 = 0;
+                let blen: u64 = metric.buckets.len();
+                while bi < blen {
+                    let b = &metric.buckets[bi];
+                    // <name>_bucket{le="<upper>"} <count>
+                    let mut np: u64 = 0;
+                    while np < nlen {
+                        out.push(mf.name[np]);
+                        np = np + 1;
+                    }
+                    let mut bs: Vec<u8> = Vec::new();
+                    bs.push(95); // _
+                    bs.push(98); // b
+                    bs.push(117); // u
+                    bs.push(99); // c
+                    bs.push(107); // k
+                    bs.push(101); // e
+                    bs.push(116); // t
+                    bs.push(123); // {
+                    bs.push(108); // l
+                    bs.push(101); // e
+                    bs.push(61); // =
+                    bs.push(34); // "
+                    let bound_str: str = fmt_f64(b.upper_bound);
+                    let mut bs2: u64 = 0;
+                    let bs2len: u64 = bound_str.len();
+                    while bs2 < bs2len {
+                        bs.push(bound_str[bs2]);
+                        bs2 = bs2 + 1;
+                    }
+                    bs.push(34); // "
+                    bs.push(125); // }
+                    bs.push(32); // space
+                    let cnt_str: str = fmt_u64(b.cumulative_count);
+                    bs2 = 0;
+                    bs2len = cnt_str.len();
+                    while bs2 < bs2len {
+                        bs.push(cnt_str[bs2]);
+                        bs2 = bs2 + 1;
+                    }
+                    bs.push(10); // \n
+                    // Append bucket line
+                    let mut bsi: u64 = 0;
+                    let bsllen: u64 = bs.len();
+                    while bsi < bsllen {
+                        out.push(bs[bsi]);
+                        bsi = bsi + 1;
+                    }
+                    bi = bi + 1;
+                }
+
+                // _count
+                let name_str: str = mf.name;
+                let count_line: str = name_str + "_count " + fmt_u64(metric.bucket_count) + "\n";
+                let mut cli: u64 = 0;
+                let cllen: u64 = count_line.len();
+                while cli < cllen {
+                    out.push(count_line[cli]);
+                    cli = cli + 1;
+                }
+
+                // _sum
+                let sum_line: str = name_str + "_sum " + fmt_f64(metric.bucket_sum) + "\n";
+                let mut sli: u64 = 0;
+                let sllen: u64 = sum_line.len();
+                while sli < sllen {
+                    out.push(sum_line[sli]);
+                    sli = sli + 1;
+                }
+            } else {
+                // counter or gauge: <name> <value>
+                let mut ni2: u64 = 0;
+                while ni2 < nlen {
+                    out.push(mf.name[ni2]);
+                    ni2 = ni2 + 1;
+                }
+
+                // Labels
+                let llen: u64 = metric.label_values.len();
+                if llen > 0 {
+                    out.push(123); // {
+                    let mut li: u64 = 0;
+                    while li < llen {
+                        if li > 0 {
+                            out.push(44); // ,
+                            out.push(32); // space
+                        }
+                        let (lk, lv) = metric.label_values[li];
+                        let mut lki: u64 = 0;
+                        let lklen: u64 = lk.len();
+                        while lki < lklen {
+                            out.push(lk[lki]);
+                            lki = lki + 1;
+                        }
+                        out.push(61); // =
+                        out.push(34); // "
+                        let escaped_lv: str = escape_label_value(lv);
+                        let mut lvi: u64 = 0;
+                        let lvlen: u64 = escaped_lv.len();
+                        while lvi < lvlen {
+                            out.push(escaped_lv[lvi]);
+                            lvi = lvi + 1;
+                        }
+                        out.push(34); // "
+                        li = li + 1;
+                    }
+                    out.push(125); // }
+                }
+
+                out.push(32);
+                let val_str: str = fmt_f64(metric.value);
+                let mut vi: u64 = 0;
+                let vlen: u64 = val_str.len();
+                while vi < vlen {
+                    out.push(val_str[vi]);
+                    vi = vi + 1;
+                }
+                out.push(10); // \n
+            }
+
+            mi = mi + 1;
+        }
+
+        fi = fi + 1;
+    }
+
+    return out.as_str();
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+pub fn test_counter() {
+    let c = Counter::new("test_counter", "A test counter");
+    assert(c.get() == 0.0, "counter starts at 0");
+    c.inc();
+    assert(c.get() == 1.0, "inc() works");
+    c.inc_by(2.5);
+    assert(c.get() == 3.5, "inc_by(2.5) works");
+    c.inc_by(-1.0);
+    assert(c.get() == 3.5, "inc_by negative is no-op");
+}
+
+#[cfg(test)]
+pub fn test_gauge() {
+    let g = Gauge::new("test_gauge", "A test gauge");
+    assert(g.get() == 0.0, "gauge starts at 0");
+    g.set(42.0);
+    assert(g.get() == 42.0, "set works");
+    g.inc();
+    assert(g.get() == 43.0, "inc works");
+    g.dec();
+    assert(g.get() == 42.0, "dec works");
+    g.add(8.0);
+    assert(g.get() == 50.0, "add works");
+    g.sub(10.0);
+    assert(g.get() == 40.0, "sub works");
+}
+
+#[cfg(test)]
+pub fn test_histogram() {
+    let buckets = default_buckets();
+    let h = Histogram::new("test_hist", "A test histogram", buckets);
+    assert(h.count() == 0, "histogram count starts at 0");
+    assert(h.sum() == 0.0, "histogram sum starts at 0");
+
+    h.observe(0.5);
+    assert(h.count() == 1, "count incremented");
+    assert(h.sum() == 0.5, "sum updated");
+
+    h.observe(5.0);
+    assert(h.count() == 2, "count incremented again");
+    assert(h.sum() == 5.5, "sum updated again");
+}
+
+#[cfg(test)]
+pub fn test_registry_gather() {
+    let mut r = Registry::new();
+    let c = Counter::new("requests_total", "Total requests");
+    let g = Gauge::new("temperature", "Current temperature");
+    let h = Histogram::new("latency_seconds", "Request latency", default_buckets());
+
+    c.inc();
+    g.set(23.5);
+    h.observe(0.1);
+    h.observe(0.5);
+    h.observe(1.5);
+
+    r.register_counter(c);
+    r.register_gauge(g);
+    r.register_histogram(h);
+
+    let families = r.gather();
+    assert(families.len() == 3, "three metric families");
+}
+
+#[cfg(test)]
+pub fn test_fnv1a() {
+    let data: &[u8] = [104, 101, 108, 108, 111]; // "hello"
+    let hash = fnv1a_hash(data);
+    // Known FNV-1a hash of "hello"
+    assert(hash == 13358317220780026775, "fnv1a('hello') matches known value");
+}
+
+#[cfg(test)]
+pub fn test_encode_text_counter() {
+    let mut r = Registry::new();
+    let c = Counter::new("requests_total", "Total number of requests");
+    c.inc();
+    c.inc();
+    r.register_counter(c);
+
+    let families = r.gather();
+    let text = encode_text(families);
+    let expected: str = "# HELP requests_total Total number of requests\n# TYPE requests_total counter\nrequests_total 2\n";
+    assert(text == expected, "counter text format matches");
+}
+
+#[cfg(test)]
+pub fn test_encode_text_histogram() {
+    let mut r = Registry::new();
+    let buckets: Vec<f64> = Vec::new();
+    buckets.push(0.5);
+    buckets.push(1.0);
+    buckets.push(5.0);
+    let h = Histogram::new("request_duration_seconds", "Request duration in seconds", buckets);
+    h.observe(0.3);
+    h.observe(0.8);
+    h.observe(2.0);
+    r.register_histogram(h);
+
+    let families = r.gather();
+    let text = encode_text(families);
+
+    // Verify key parts are in the output
+    let has_help: bool = text.has("# HELP request_duration_seconds Request duration in seconds");
+    let has_type: bool = text.has("# TYPE request_duration_seconds histogram");
+    let has_bucket_le_0_5: bool = text.has("request_duration_seconds_bucket{le=\"0.5\"}");
+    let has_count: bool = text.has("request_duration_seconds_count 3");
+    let has_sum: bool = text.has("request_duration_seconds_sum");
+    assert(has_help, "HELP line present");
+    assert(has_type, "TYPE line present");
+    assert(has_bucket_le_0_5, "bucket le=0.5 present");
+    assert(has_count, "count line present");
+    assert(has_sum, "sum line present");
+}
